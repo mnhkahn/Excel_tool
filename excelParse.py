@@ -1,4 +1,6 @@
 import datetime
+import os
+
 import loadConfig
 from time import perf_counter
 
@@ -19,25 +21,39 @@ def exec_time(func):
 shop_map = {}
 shop_map_key = set()
 
-
 # 获取配置信息
 config_obj = loadConfig.get_config()
 
 
-def open_excel(path):
-    print("--------【{}】打开Excel--------".format(datetime.datetime.now()))
-    wb = load_workbook(path, read_only=True, data_only=True, keep_links=False)
-    print("--------【{}】打开ExcelEnd--------".format(datetime.datetime.now()))
+def open_excel_folder(path):
+    file_list = {}
+    if path.endswith(".xlsx"):
+        file_list = [path]
+    else:
+        print("--------【{}】打开文件--------".format(datetime.datetime.now()))
+        file_list = os.listdir(path)
+
     # 创建一个新的excel
     write_book = Workbook()
     # 设置第一个sheet页名字为汇总
     write_book.active.title = "汇总"
     sheet_num = 1
 
-    for sheet_name in wb.sheetnames:
-        parse_sheet(wb, sheet_name)
+    for file_name in file_list:
+        excel_path = config_obj.output_path + file_name
+        if excel_path.endswith(".xlsx") and not file_name.startswith('~$') and excel_path != config_obj.wip_xlsx:
+            print("--------【{}】打开Excel{}--------".format(datetime.datetime.now(), excel_path))
+            wb = load_workbook(excel_path, read_only=True, data_only=True, keep_links=False)
+            print("--------【{}】打开ExcelEnd--------".format(datetime.datetime.now()))
+
+            for sheet_name in wb.sheetnames:
+                if sheet_name in config_obj.sheet_names:
+                    parse_sheet(wb, sheet_name)
+
+    """ 解析完成保存 """
+    for _sheet_name in config_obj.sheet_names:
         if len(shop_map_key) > 0:
-            save_excel(write_book, sheet_num, sheet_name)
+            save_excel(write_book, sheet_num, _sheet_name)
             # 清空缓存
             shop_map.clear()
             shop_map_key.clear()
@@ -52,9 +68,6 @@ def save_excel(write_book, sheet_num, sheet_name):
         n_sheet.cell(1, i, group_column)
         i = i + 1
 
-    shop_name = None
-    shop_count = 0
-    money_sum = 0
     n_sheet_row = 1
     # 将缓存数据写入Excel
     for shop_key in shop_map_key:
@@ -67,18 +80,10 @@ def save_excel(write_book, sheet_num, sheet_name):
                 info_val = info_map[count_column]
                 n_sheet.cell(n_sheet_row, col_index, info_val)
                 col_index = col_index + 1
-            # 汇总
-            # shop_name = info.shop_name
-            # shop_count = shop_count + info.shop_count
-            # money_sum = money_sum + info.money_sum
         else:
             print(shop_key)
 
-    # count_sheet = write_book.get_sheet_by_name("汇总")
-    # count_sheet.cell(sheet_num, 1, shop_name)
-    # count_sheet.cell(sheet_num, 2, shop_count)
-    # count_sheet.cell(sheet_num, 3, money_sum)
-    write_book.save("C:\\Users\\l2503\\Desktop\\汇总.xlsx")
+    write_book.save(config_obj.output_path + config_obj.wip_xlsx)
 
 
 @exec_time
@@ -88,6 +93,7 @@ def parse_sheet(wb, sheet_name):
     # 返回解析对象
     parse_info = get_parse_info(sheet_obj)
     if parse_info is not None:
+        """解析文本数据"""
         parse_core(sheet_obj, parse_info)
 
     return
@@ -108,12 +114,15 @@ def get_parse_info(sheet_obj):
             if cell is None or isinstance(cell, str) is False:
                 continue
             for group_column in config_obj.all_columns:
-                if verify_title(cell, group_column) is True:
+                # if verify_title(cell, group_column) is True:
+                # 完全匹配，前缀匹配会覆盖
+                if cell == group_column:
                     parse_info.cell_map[group_column] = col_idx
-            # print(str(parse_info.cell_map))
+                    print(str(parse_info.cell_map), group_column, "||||", cell)
             # 如果两边长度一致
             if len(parse_info.cell_map) == len(config_obj.all_columns):
                 parse_info.min_row_num = row_num
+                print(str(parse_info.cell_map), parse_info.min_row_num, "@@@@@", config_obj.all_columns)
                 # 返回需要解析的信息
                 return parse_info
         row_num = row_num + 1
@@ -122,6 +131,7 @@ def get_parse_info(sheet_obj):
 
 def parse_core(sheet_obj, parse_info):
     """ 解析核心逻辑 """
+    # min_row_num 记录的是表头行号，+1后就是内容行
     row_index = parse_info.min_row_num + 1
     print("核心逻辑--------总行数：【{}】，【{}】从第【{}】开始解析--------".
           format(sheet_obj.max_row, datetime.datetime.now(), row_index))
@@ -139,7 +149,8 @@ def parse_core(sheet_obj, parse_info):
         info_map = {}
         for group_column in config_obj.group_columns:
             """ 遍历分组列 """
-            group_index = parse_info.cell_map[group_column]-1
+            """ 分组计算group_columns写入info_map """
+            group_index = parse_info.cell_map[group_column] - 1
             title_str = str(row[group_index])
             # 赋值
             info_map[group_column] = title_str
@@ -157,19 +168,19 @@ def parse_core(sheet_obj, parse_info):
 
         for count_column in config_obj.count_columns:
             """ 遍历汇总列 """
-            count_index = parse_info.cell_map[count_column]-1
+            count_index = parse_info.cell_map[count_column] - 1
             count_val = row[count_index]
             if count_val is None or isinstance(count_val, str) is True:
                 count_val = 0.0
             info_map[count_column] = count_val
 
-
-
         if key_str in shop_map:
+            """ 如果存在，计数列求和保存到shop_map里 """
             cache_map = shop_map[key_str]
             for count_column in config_obj.count_columns:
                 cache_map[count_column] = cache_map[count_column] + info_map[count_column]
         else:
+            """ shop_map_key记录分组唯一key，如果不存在插入 """
             shop_map_key.add(key_str)
             shop_map[key_str] = info_map
 
@@ -185,6 +196,7 @@ def verify_title(title, key_str):
 
 class ParseInfo:
     """ 解析信息 """
+
     def __init__(self):
         self.min_row_num = 0
         self.cell_map = {}
@@ -216,4 +228,4 @@ class ParseInfo:
 
 
 if __name__ == '__main__':
-    open_excel("C:\\Users\\l2503\\Desktop\\线上不开票客户4月份销售明细.xlsx")
+    open_excel_folder(config_obj.path)
